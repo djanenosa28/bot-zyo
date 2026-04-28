@@ -39,6 +39,26 @@ async function initDatabase() {
         is_active INTEGER DEFAULT 0
       )
     `);
+    // Ticket Config table
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS ticket_config (
+        guild_id TEXT PRIMARY KEY,
+        open_category_id TEXT,
+        closed_category_id TEXT,
+        archive_category_id TEXT,
+        staff_role_id TEXT
+      )
+    `);
+
+    // Active Tickets table
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS active_tickets (
+        channel_id TEXT PRIMARY KEY,
+        user_id TEXT,
+        guild_id TEXT,
+        status TEXT DEFAULT 'open' -- 'open', 'closed', 'archived'
+      )
+    `);
     console.log('Database initialized successfully.');
   } catch (error) {
     console.error('Error initializing database:', error);
@@ -105,6 +125,50 @@ async function isStealActive(channelId) {
   return result.rows.length > 0 && result.rows[0].is_active === 1;
 }
 
+// Ticket Helpers
+async function saveTicketConfig(guildId, openId, closedId, archiveId, staffId) {
+  await client.execute({
+    sql: `INSERT INTO ticket_config (guild_id, open_category_id, closed_category_id, archive_category_id, staff_role_id) 
+          VALUES (?, ?, ?, ?, ?) 
+          ON CONFLICT(guild_id) DO UPDATE SET 
+            open_category_id=excluded.open_category_id, 
+            closed_category_id=excluded.closed_category_id, 
+            archive_category_id=excluded.archive_category_id, 
+            staff_role_id=excluded.staff_role_id`,
+    args: [guildId, openId, closedId, archiveId, staffId]
+  });
+}
+
+async function getTicketConfig(guildId) {
+  const result = await client.execute({
+    sql: 'SELECT * FROM ticket_config WHERE guild_id = ?',
+    args: [guildId]
+  });
+  return result.rows[0];
+}
+
+async function createTicketEntry(channelId, userId, guildId) {
+  await client.execute({
+    sql: 'INSERT INTO active_tickets (channel_id, user_id, guild_id) VALUES (?, ?, ?)',
+    args: [channelId, userId, guildId]
+  });
+}
+
+async function updateTicketStatus(channelId, status) {
+  await client.execute({
+    sql: 'UPDATE active_tickets SET status = ? WHERE channel_id = ?',
+    args: [status, channelId]
+  });
+}
+
+async function getTicketEntry(channelId) {
+  const result = await client.execute({
+    sql: 'SELECT * FROM active_tickets WHERE channel_id = ?',
+    args: [channelId]
+  });
+  return result.rows[0];
+}
+
 module.exports = {
   initDatabase,
   saveMessage,
@@ -113,5 +177,10 @@ module.exports = {
   setAutoStoreStatus,
   updateLastNotified,
   setStealStatus,
-  isStealActive
+  isStealActive,
+  saveTicketConfig,
+  getTicketConfig,
+  createTicketEntry,
+  updateTicketStatus,
+  getTicketEntry
 };

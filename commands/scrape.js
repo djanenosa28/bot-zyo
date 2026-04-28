@@ -32,56 +32,81 @@ module.exports = {
 
         await interaction.editReply(`⏳ Sedang memproses **${textChannels.size}** channel... Mohon tunggu.`);
 
-        const results = []; // { channel, item, price_raw, price_num }
+        const results = [];
 
-        // Price regex: captures text before "Rp. " as title, and the number after as price
-        // Example: "Netflix Premium 1 Bulan Rp. 50.000" -> title: "Netflix Premium 1 Bulan", price: "50.000"
-        const priceRegex = /(.+?)\s+Rp\.\s+([\d.,]+)/g;
+        // ── Pre-processing helpers ────────────────────────────────────────────
+        // Strip Discord emoji format: <:name:id> or <a:name:id>
+        const discordEmojiRegex = /<a?:[\w\d_]+:\d+>/g;
+
+        function cleanText(raw) {
+            return raw
+                .replace(/~~[^~]+~~/g, '')          // Remove strikethrough (OLD price): ~~Rp. 10.000~~
+                .replace(discordEmojiRegex, '')       // Remove Discord emoji <:name:id>
+                .replace(/\*\*([^*]+)\*\*/g, '$1')   // Remove bold **text** → text
+                .replace(/\*([^*]+)\*/g, '$1')        // Remove italic *text* → text
+                .replace(/__([^_]+)__/g, '$1')        // Remove underline
+                .replace(/`[^`]+`/g, '')              // Remove inline code
+                .replace(/\s{2,}/g, ' ')              // Collapse multiple spaces
+                .trim();
+        }
+
+        // ── Price regex ───────────────────────────────────────────────────────
+        // Matches: "Item text [optional: or →] Rp. 5.000"
+        // After cleanup, format becomes: "7 Hari:  > Rp. 5.000" → captures "7 Hari" and "5.000"
+        const priceRegex = /([^\n]+?)\s*(?:[→>:])?\s*Rp\.\s+([\d.,]+)/gi;
 
         for (const [, ch] of textChannels) {
             try {
                 const messages = await ch.messages.fetch({ limit: 100 });
 
                 for (const [, msg] of messages) {
-                    // Skip bot messages and empty content
                     if (!msg.content && msg.embeds.length === 0) continue;
 
-                    // Combine text content + embed descriptions for scraping
+                    // Collect all text sources
                     const texts = [];
                     if (msg.content) texts.push(msg.content);
                     for (const embed of msg.embeds) {
                         if (embed.description) texts.push(embed.description);
                         if (embed.title) texts.push(embed.title);
                         for (const field of embed.fields || []) {
-                            texts.push(`${field.name} ${field.value}`);
+                            texts.push(`${field.name}\n${field.value}`);
                         }
                     }
 
-                    const fullText = texts.join('\n');
-                    let match;
-                    priceRegex.lastIndex = 0; // Reset regex index
+                    // ── CLEAN FIRST, THEN PARSE ──────────────────────────────
+                    const fullText = cleanText(texts.join('\n'));
 
-                    while ((match = priceRegex.exec(fullText)) !== null) {
+                    // Process line-by-line for better context
+                    const lines = fullText.split('\n');
+                    for (const line of lines) {
+                        const cleanLine = line.trim();
+                        if (!cleanLine.includes('Rp.')) continue;
+
+                        priceRegex.lastIndex = 0;
+                        const match = priceRegex.exec(cleanLine);
+                        if (!match) continue;
+
                         const rawItem = match[1].trim();
                         const rawPrice = match[2].trim();
 
-                        // Clean up item name: remove leading symbols/bullets/emojis
-                        const cleanItem = rawItem
-                            .replace(/^[-*•>~`|🔹🔸▸►▷→]+\s*/u, '')
-                            .replace(/~~[^~]+~~/g, '') // Remove strikethrough
+                        // Clean item name further
+                        let cleanItem = rawItem
+                            .replace(/^[-*•>~`|🔹🔸▸►▷→✦✧·\s]+/u, '') // leading symbols
+                            .replace(/[:\-–—→>]+$/, '')                   // trailing separators
                             .trim();
 
-                        // Clean price to number only
-                        const priceNum = parseInt(rawPrice.replace(/[.,]/g, '').replace(/\D/g, ''), 10);
+                        // Skip empty or pure-number items
+                        if (!cleanItem || /^\d+$/.test(cleanItem)) continue;
 
-                        if (cleanItem && priceNum > 0) {
-                            results.push({
-                                channel: ch.name,
-                                item: cleanItem,
-                                price_display: `Rp. ${rawPrice}`,
-                                price_number: priceNum
-                            });
-                        }
+                        const priceNum = parseInt(rawPrice.replace(/[.,]/g, '').replace(/\D/g, ''), 10);
+                        if (priceNum <= 0) continue;
+
+                        results.push({
+                            channel: ch.name,
+                            item: cleanItem,
+                            price_display: `Rp. ${rawPrice}`,
+                            price_number: priceNum
+                        });
                     }
                 }
             } catch (err) {

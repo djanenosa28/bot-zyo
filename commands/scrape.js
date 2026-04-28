@@ -34,26 +34,29 @@ module.exports = {
 
         const results = [];
 
-        // ── Pre-processing helpers ────────────────────────────────────────────
-        // Strip Discord emoji format: <:name:id> or <a:name:id>
+        // ── Regexes ───────────────────────────────────────────────────────────
         const discordEmojiRegex = /<a?:[\w\d_]+:\d+>/g;
 
-        function cleanText(raw) {
-            return raw
-                .replace(/~~[^~]+~~/g, '')          // Remove strikethrough (OLD price): ~~Rp. 10.000~~
-                .replace(discordEmojiRegex, '')       // Remove Discord emoji <:name:id>
-                .replace(/\*\*([^*]+)\*\*/g, '$1')   // Remove bold **text** → text
-                .replace(/\*([^*]+)\*/g, '$1')        // Remove italic *text* → text
-                .replace(/__([^_]+)__/g, '$1')        // Remove underline
-                .replace(/`[^`]+`/g, '')              // Remove inline code
-                .replace(/\s{2,}/g, ' ')              // Collapse multiple spaces
+        // Target: price inside bold markers **Rp. 5.000** (this is always the FINAL price)
+        // Also matches single-star *Rp. 5.000*
+        const boldPriceRegex = /\*{1,2}Rp\.\s*([\d.,]+)\*{1,2}/g;
+
+        // Extract item name = text at start of line before ~~...~~ or before the final price
+        function extractItemName(line) {
+            // Get text before first ~~ (strikethrough) or before first **Rp.
+            const beforeStrike = line.split('~~')[0];
+            const beforeBoldPrice = line.split(/\*{1,2}Rp\./)[0];
+            const candidate = beforeStrike.length < beforeBoldPrice.length
+                ? beforeStrike
+                : beforeBoldPrice;
+
+            return candidate
+                .replace(discordEmojiRegex, '')          // Remove Discord emojis
+                .replace(/^[-*•>~`|🔹🔸▸►▷→✦✧·\s]+/u, '') // Remove leading symbols
+                .replace(/[:\-–—→>]+$/, '')               // Remove trailing separators
+                .replace(/\s{2,}/g, ' ')
                 .trim();
         }
-
-        // ── Price regex ───────────────────────────────────────────────────────
-        // Matches: "Item text [optional: or →] Rp. 5.000"
-        // After cleanup, format becomes: "7 Hari:  > Rp. 5.000" → captures "7 Hari" and "5.000"
-        const priceRegex = /([^\n]+?)\s*(?:[→>:])?\s*Rp\.\s+([\d.,]+)/gi;
 
         for (const [, ch] of textChannels) {
             try {
@@ -73,40 +76,31 @@ module.exports = {
                         }
                     }
 
-                    // ── CLEAN FIRST, THEN PARSE ──────────────────────────────
-                    const fullText = cleanText(texts.join('\n'));
+                    const fullText = texts.join('\n');
 
-                    // Process line-by-line for better context
-                    const lines = fullText.split('\n');
-                    for (const line of lines) {
-                        const cleanLine = line.trim();
-                        if (!cleanLine.includes('Rp.')) continue;
+                    // Process line by line
+                    for (const line of fullText.split('\n')) {
+                        if (!line.includes('Rp.')) continue;
 
-                        priceRegex.lastIndex = 0;
-                        const match = priceRegex.exec(cleanLine);
-                        if (!match) continue;
+                        boldPriceRegex.lastIndex = 0;
+                        let match;
 
-                        const rawItem = match[1].trim();
-                        const rawPrice = match[2].trim();
+                        while ((match = boldPriceRegex.exec(line)) !== null) {
+                            const rawPrice = match[1].trim();
+                            const priceNum = parseInt(rawPrice.replace(/[.,]/g, '').replace(/\D/g, ''), 10);
+                            if (priceNum <= 0) continue;
 
-                        // Clean item name further
-                        let cleanItem = rawItem
-                            .replace(/^[-*•>~`|🔹🔸▸►▷→✦✧·\s]+/u, '') // leading symbols
-                            .replace(/[:\-–—→>]+$/, '')                   // trailing separators
-                            .trim();
+                            // Get item name from this line
+                            const cleanItem = extractItemName(line);
+                            if (!cleanItem || /^\d+$/.test(cleanItem)) continue;
 
-                        // Skip empty or pure-number items
-                        if (!cleanItem || /^\d+$/.test(cleanItem)) continue;
-
-                        const priceNum = parseInt(rawPrice.replace(/[.,]/g, '').replace(/\D/g, ''), 10);
-                        if (priceNum <= 0) continue;
-
-                        results.push({
-                            channel: ch.name,
-                            item: cleanItem,
-                            price_display: `Rp. ${rawPrice}`,
-                            price_number: priceNum
-                        });
+                            results.push({
+                                channel: ch.name,
+                                item: cleanItem,
+                                price_display: `Rp. ${rawPrice}`,
+                                price_number: priceNum
+                            });
+                        }
                     }
                 }
             } catch (err) {

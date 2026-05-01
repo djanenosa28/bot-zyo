@@ -59,6 +59,15 @@ async function initDatabase() {
         status TEXT DEFAULT 'open' -- 'open', 'closed', 'archived'
       )
     `);
+
+    // Anti Phishing table
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS anti_phishing (
+        channel_id TEXT PRIMARY KEY,
+        guild_id TEXT,
+        is_active INTEGER DEFAULT 0
+      )
+    `);
     console.log('Database initialized successfully.');
   } catch (error) {
     console.error('Error initializing database:', error);
@@ -125,6 +134,24 @@ async function isStealActive(channelId) {
   return result.rows.length > 0 && result.rows[0].is_active === 1;
 }
 
+// Anti Phishing
+async function setAntiPhishingStatus(channelId, guildId, isActive) {
+  await client.execute({
+    sql: `INSERT INTO anti_phishing (channel_id, guild_id, is_active) 
+          VALUES (?, ?, ?) 
+          ON CONFLICT(channel_id) DO UPDATE SET is_active=excluded.is_active`,
+    args: [channelId, guildId, isActive ? 1 : 0]
+  });
+}
+
+async function isAntiPhishingActive(channelId) {
+  const result = await client.execute({
+    sql: 'SELECT is_active FROM anti_phishing WHERE channel_id = ?',
+    args: [channelId]
+  });
+  return result.rows.length > 0 && result.rows[0].is_active === 1;
+}
+
 // Ticket Helpers
 async function saveTicketConfig(guildId, openId, closedId, archiveId, staffId) {
   await client.execute({
@@ -182,5 +209,7 @@ module.exports = {
   getTicketConfig,
   createTicketEntry,
   updateTicketStatus,
-  getTicketEntry
+  getTicketEntry,
+  setAntiPhishingStatus,
+  isAntiPhishingActive
 };

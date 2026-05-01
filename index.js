@@ -10,7 +10,8 @@ const {
   getTicketConfig,
   createTicketEntry,
   getTicketEntry,
-  updateTicketStatus
+  updateTicketStatus,
+  isAntiPhishingActive
 } = require('./database');
 const {
   EmbedBuilder,
@@ -115,7 +116,30 @@ client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
   if (!message.guild) return;
 
-  // Check if channel is monitored
+  // Anti-Phishing Logic
+  const isPhishingChannel = await isAntiPhishingActive(message.channelId);
+  if (isPhishingChannel) {
+    const hasLink = /https?:\/\/[^\s]+/i.test(message.content);
+    const hasAttachment = message.attachments.size > 0;
+    const isAdmin = message.member?.permissions.has(PermissionFlagsBits.Administrator);
+
+    if ((hasLink || hasAttachment) && !isAdmin) {
+      try {
+        await message.guild.members.ban(message.author.id, { 
+          deleteMessageSeconds: 604800, // 7 days (maximum allowed)
+          reason: 'Anti-Phishing: Mengirim link/gambar di channel terlarang' 
+        });
+        
+        const warnMessage = await message.channel.send(`🚨 **Anti-Phishing System**\n<@${message.author.id}> telah di-banned karena mengirim link/gambar di channel ini.`);
+        setTimeout(() => warnMessage.delete().catch(()=>null), 5000);
+      } catch (error) {
+        console.error('Gagal membanned user (anti-phishing):', error);
+      }
+      return; // Stop processing further for this message
+    }
+  }
+
+  // Check if channel is monitored for Emoji Stealer
   const active = await isStealActive(message.channelId);
   if (!active) return;
 
